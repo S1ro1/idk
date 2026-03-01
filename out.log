@@ -1,0 +1,22 @@
+INFO 02-28 22:37:48 [serve.py:100] Defaulting api_server_count to data_parallel_size (8).
+INFO 02-28 22:37:48 [utils.py:287] 
+INFO 02-28 22:37:48 [utils.py:287]        █     █     █▄   ▄█
+INFO 02-28 22:37:48 [utils.py:287]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.16.0
+INFO 02-28 22:37:48 [utils.py:287]   █▄█▀ █     █     █     █  model   MiniMaxAI/MiniMax-M2.5
+INFO 02-28 22:37:48 [utils.py:287]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+INFO 02-28 22:37:48 [utils.py:287] 
+INFO 02-28 22:37:48 [utils.py:223] non-default args: {'model_tag': 'MiniMaxAI/MiniMax-M2.5', 'api_server_count': 8, 'enable_auto_tool_choice': True, 'tool_call_parser': 'minimax_m2', 'model': 'MiniMaxAI/MiniMax-M2.5', 'trust_remote_code': True, 'reasoning_parser': 'minimax_m2_append_think', 'data_parallel_size': 8, 'enable_expert_parallel': True}
+WARNING 02-28 22:37:48 [system_utils.py:271] Found ulimit of 64000 and failed to automatically increase with error current limit exceeds maximum limit. This can cause fd limit errors like `OSError: [Errno 24] Too many open files`. Consider increasing with ulimit -n
+INFO 02-28 22:37:48 [arg_utils.py:620] HF_HUB_OFFLINE is True, replace model_id [MiniMaxAI/MiniMax-M2.5] to model_path [/shared/huggingface/hub/models--MiniMaxAI--MiniMax-M2.5/snapshots/1248334bbc56717c3d47a6bc66de110059b6580f]
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+The argument `trust_remote_code` is to be used with Auto classes. It has no effect here and is ignored.
+INFO 02-28 22:37:48 [model.py:529] Resolved architecture: MiniMaxM2ForCausalLM
+ERROR 02-28 22:37:48 [repo_utils.py:47] Error retrieving safetensors: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/shared/huggingface/hub/models--MiniMaxAI--MiniMax-M2.5/snapshots/1248334bbc56717c3d47a6bc66de110059b6580f'. Use `repo_type` argument if needed., retrying 1 of 2
+ERROR 02-28 22:37:50 [repo_utils.py:45] Error retrieving safetensors: Repo id must be in the form 'repo_name' or 'namespace/repo_name': '/shared/huggingface/hub/models--MiniMaxAI--MiniMax-M2.5/snapshots/1248334bbc56717c3d47a6bc66de110059b6580f'. Use `repo_type` argument if needed.
+INFO 02-28 22:37:50 [model.py:1871] Downcasting torch.float32 to torch.bfloat16.
+INFO 02-28 22:37:50 [model.py:1549] Using max model len 196608
+INFO 02-28 22:37:51 [scheduler.py:224] Chunked prefill is enabled with max_num_batched_tokens=8192.
+INFO 02-28 22:37:51 [vllm.py:689] Asynchronous scheduling is enabled.
+INFO 02-28 22:37:51 [vllm.py:699] Disabling NCCL for DP synchronization when using async scheduling.
+INFO 02-28 22:37:51 [utils.py:843] Started DP Coordinator process (PID: 1965226)
+INFO 02-28 22:37:51 [utils.py:217] Started 8 API server processes
