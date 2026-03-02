@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
-# launch_bench.sh — Launch decode-only vLLM cluster for benchmarking
+# launch_bench_hybrid.sh — Launch decode-only vLLM cluster with hybrid LB
 # =============================================================================
 #
-# Uses DecodeBenchConnector to fill KV cache with random values so decode
-# throughput can be profiled in isolation — no prefill cluster or NIXL needed.
+# Like launch_bench.sh, but uses --data-parallel-hybrid-lb so every node runs
+# its own API server (scheduling only its co-located 8 DP ranks). An external
+# load balancer or the distributed benchmark client distributes requests across
+# all per-node endpoints.
 #
 # Usage
 # ─────
-#   bash scripts/launch_bench.sh [OPTIONS]
+#   bash scripts/launch_bench_hybrid.sh [OPTIONS]
 #
 # Options:
 #   --nodes-file FILE     Node list (required)
@@ -30,9 +32,9 @@ NODES_FILE=""
 DECODE_NODES_OVERRIDE=""
 A2A_BACKEND="deepep_low_latency"
 MODEL="zai-org/GLM-5-FP8"
-MAX_MODEL_LEN=32768
+MAX_MODEL_LEN=2048
 GPU_MEM_UTIL=0.90
-MAX_NUM_SEQS=1280
+MAX_NUM_SEQS=2048
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -49,7 +51,7 @@ done
 
 if [[ -z "$NODES_FILE" ]]; then
     echo "ERROR: --nodes-file is required" >&2
-    echo "Usage: bash scripts/launch_bench.sh --nodes-file /tmp/bench_nodes.txt" >&2
+    echo "Usage: bash scripts/launch_bench_hybrid.sh --nodes-file /tmp/bench_nodes.txt" >&2
     exit 1
 fi
 
@@ -125,8 +127,6 @@ if (( DO_STOP )); then
     mapfile -t nodes < <(read_all_nodes)
     for node in "${nodes[@]}"; do
         echo -n "  [$node] "
-        # Use pgrep + kill instead of pkill -f to avoid killing the SSH
-        # session (pkill -f matches the bash process running the command).
         ssh $SSH_OPTS -n "$node" \
             'pids=$(ps aux | grep -E "VLLM::|vllm serve|vllm.entrypoints|multiprocessing.resource_tracker" | grep -v grep | awk "{print \$2}")
              if [ -n "$pids" ]; then echo "$pids" | xargs kill -9 2>/dev/null; fi
@@ -157,13 +157,14 @@ DECODE_EP=$(( NUM_DECODE_NODES * DP_LOCAL ))
 HEAD="${ALL_NODES[0]}"
 
 echo "================================================================"
-echo " Decode benchmark server  [DecodeBenchConnector]"
+echo " Decode benchmark server  [Hybrid LB — DecodeBenchConnector]"
 echo " Model          : $MODEL"
 echo " Nodes          : ${ALL_NODES[*]}"
 echo " EP             : $DECODE_EP  (${NUM_DECODE_NODES} nodes × $DP_LOCAL GPUs)"
 echo " A2A backend    : $A2A_BACKEND"
 echo " max_model_len  : $MAX_MODEL_LEN"
 echo " CUDAGraph mode : FULL_DECODE_ONLY"
+echo " LB mode        : hybrid (each node serves on :$DECODE_PORT)"
 echo "================================================================"
 
 # ── Clean stale processes ────────────────────────────────────────────────────
@@ -180,17 +181,21 @@ for node in "${ALL_NODES[@]}"; do
 done
 sleep 2
 
-# ── Resolve head IP ──────────────────────────────────────────────────────────
+# ── Resolve all node IPs ────────────────────────────────────────────────────
 echo ""
-echo "--- Resolving head IP ---"
-HEAD_IP="$(get_node_ip "$HEAD")"
-echo "  Head : $HEAD ($HEAD_IP)"
+echo "--- Resolving node IPs ---"
+declare -a NODE_IPS
+for i in "${!ALL_NODES[@]}"; do
+    NODE_IPS[$i]="$(get_node_ip "${ALL_NODES[$i]}")"
+    echo "  Node $i : ${ALL_NODES[$i]} (${NODE_IPS[$i]})"
+done
+HEAD_IP="${NODE_IPS[0]}"
 
 # =============================================================================
-# Launch head
+# Launch head (rank 0)
 # =============================================================================
 echo ""
-echo "=== Starting decode-bench server ==="
+echo "=== Starting decode-bench server (hybrid LB) ==="
 
 HEAD_LOG="$LOG_DIR/bench_head.log"
 HEAD_PID=$(launch_remote "$HEAD" "$HEAD_LOG" <<HEAD_SCRIPT
@@ -211,9 +216,8 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-size-local ${DP_LOCAL} \
     --data-parallel-address \$D_IP \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
+    --data-parallel-hybrid-lb \
     --enable-expert-parallel \
-    --enable-eplb \
-    --enable-dbo \
     --all2all-backend ${A2A_BACKEND} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
@@ -227,7 +231,7 @@ HEAD_SCRIPT
 echo "  Head PID: $HEAD_PID"
 
 # =============================================================================
-# Launch workers
+# Launch workers (NOT headless — each runs its own API server)
 # =============================================================================
 for i in "${!ALL_NODES[@]}"; do
     (( i == 0 )) && continue
@@ -245,18 +249,18 @@ export GLOO_SOCKET_IFNAME=bond0
 export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
 rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
 exec '${VLLM_BIN}' serve '${MODEL}' \
-    --headless \
+    --host 0.0.0.0 \
+    --port ${DECODE_PORT} \
     --tensor-parallel-size 1 \
     --data-parallel-size ${DECODE_EP} \
     --data-parallel-size-local ${DP_LOCAL} \
     --data-parallel-start-rank ${START_RANK} \
     --data-parallel-address ${HEAD_IP} \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
+    --data-parallel-hybrid-lb \
     --enable-expert-parallel \
     --all2all-backend ${A2A_BACKEND} \
     --trust-remote-code \
-    --enable-eplb \
-    --enable-dbo \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
     --max-num-seqs ${MAX_NUM_SEQS} \
@@ -269,24 +273,43 @@ WORKER_SCRIPT
 done
 
 # =============================================================================
-# Wait for server
+# Wait for ALL nodes to be healthy
 # =============================================================================
 echo ""
-echo "=== Waiting for server ==="
-wait_for_server "$HEAD_IP" "$DECODE_PORT" "Decode($HEAD)" 900
+echo "=== Waiting for all nodes ==="
+FAILED=0
+for i in "${!ALL_NODES[@]}"; do
+    if ! wait_for_server "${NODE_IPS[$i]}" "$DECODE_PORT" "Node $i (${ALL_NODES[$i]})" 900; then
+        FAILED=1
+    fi
+done
+
+if (( FAILED )); then
+    echo ""
+    echo "ERROR: one or more nodes failed health check" >&2
+    echo "Check logs: ssh <node> 'tail -50 $LOG_DIR/bench_*.log'" >&2
+    exit 1
+fi
 
 echo ""
 echo "================================================================"
-echo " Decode benchmark server is UP"
+echo " Decode benchmark server is UP  [Hybrid LB]"
 echo ""
-echo "  Endpoint : http://${HEAD_IP}:${DECODE_PORT}"
+echo "  Endpoints (one per node):"
+for i in "${!ALL_NODES[@]}"; do
+    echo "    Node $i : http://${NODE_IPS[$i]}:${DECODE_PORT}"
+done
+echo ""
 echo "  Model    : $MODEL"
 echo "  EP       : $DECODE_EP  A2A=$A2A_BACKEND"
 echo "  Logs     : ssh <node> 'tail -f $LOG_DIR/bench_*.log'"
 echo ""
-echo "  Run benchmarks:"
+echo "  Run distributed benchmarks:"
+echo "    python scripts/bench_distributed.py --nodes-file $NODES_FILE"
+echo ""
+echo "  Or single-node benchmark (one endpoint only):"
 echo "    python scripts/bench.py --base-url http://${HEAD_IP}:${DECODE_PORT}"
 echo ""
 echo "  Stop:"
-echo "    bash scripts/launch_bench.sh --nodes-file $NODES_FILE --stop"
+echo "    bash scripts/launch_bench_hybrid.sh --nodes-file $NODES_FILE --stop"
 echo "================================================================"

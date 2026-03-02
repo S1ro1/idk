@@ -3,9 +3,9 @@
 Benchmark decode throughput of `zai-org/GLM-5-FP8` in isolation using
 vLLM's `DecodeBenchConnector`. No prefill cluster, no NIXL, no proxy needed.
 
-Two scripts, one concern each:
-- **`launch_bench.sh`** — starts/stops the decode-bench server cluster
-- **`bench.py`** — runs benchmarks against it
+Two modes:
+- **Internal LB** (default): `launch_bench.sh` + `bench.py` — single API server on head node, workers headless
+- **Hybrid LB**: `launch_bench_hybrid.sh` + `bench_distributed.py` — every node runs its own API server, benchmark client distributes load
 
 Last verified: **2 March 2026** on H200 HGX-8 cluster.
 
@@ -219,6 +219,86 @@ results/decode_in1024_out1024_32.json
 
 ---
 
+## Hybrid LB mode
+
+Internal LB sends all traffic through a single head node API server, which can
+bottleneck at high concurrency. **Hybrid LB** (`--data-parallel-hybrid-lb`)
+gives each node its own API server scheduling only its 8 co-located DP ranks.
+The distributed benchmark client splits load across all endpoints.
+
+### Quick start (hybrid)
+
+```bash
+# 1. Start hybrid server (all 4 nodes serve on :8200)
+bash scripts/launch_bench_hybrid.sh --nodes-file /tmp/bench_nodes.txt
+
+# 2. Run distributed benchmarks (splits load across all nodes)
+python scripts/bench_distributed.py --nodes-file /tmp/bench_nodes.txt
+
+# 3. Stop
+bash scripts/launch_bench_hybrid.sh --nodes-file /tmp/bench_nodes.txt --stop
+```
+
+### Server: launch_bench_hybrid.sh
+
+Same options as `launch_bench.sh`. Key differences:
+- Every node (including workers) runs an API server on port 8200
+- `--data-parallel-hybrid-lb` flag on all nodes
+- Workers are NOT `--headless`
+- Health check waits for ALL nodes, not just head
+
+### Distributed benchmark: bench_distributed.py
+
+Accepts either `--nodes-file` (resolves IPs) or `--endpoints` (explicit URLs).
+
+```bash
+# Default sweep
+python scripts/bench_distributed.py --nodes-file /tmp/bench_nodes.txt
+
+# Custom concurrency
+python scripts/bench_distributed.py --nodes-file /tmp/bench_nodes.txt -c 32,64,128,256
+
+# Explicit endpoints
+python scripts/bench_distributed.py \
+    --endpoints http://10.0.0.1:8200,http://10.0.0.2:8200,http://10.0.0.3:8200,http://10.0.0.4:8200
+
+# Verbose per-node breakdown
+python scripts/bench_distributed.py --nodes-file /tmp/bench_nodes.txt --verbose
+```
+
+**How it works:**
+- Splits total prompts evenly across N nodes
+- Splits total concurrency evenly across N nodes
+- Runs `vllm bench serve` in parallel (one subprocess per node)
+- Aggregates: sum throughput, weighted-mean p50, max p99 (conservative)
+- Saves per-node results for debugging (`results/*_per_node_*.json`)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--nodes-file FILE` | — | Node hostnames (resolves IPs via SSH) |
+| `--endpoints URLs` | — | Comma-separated endpoint URLs |
+| `--port` | `8200` | Port (used with --nodes-file) |
+| `--model` | auto-detected | Model name override |
+| `-c`, `--concurrencies` | `1,8,32,64,128,256` | Total concurrency levels |
+| `-n`, `--num-prompts` | `max(c*2, 128)` | Total requests per level (split across nodes) |
+| `--input-len` | `1024` | Input tokens per request |
+| `--output-len` | `1024` | Output tokens per request |
+| `--result-dir` | `results` | Where to save JSON results |
+| `--label` | auto-generated | Result filename prefix |
+| `--verbose` | off | Print per-node breakdown |
+
+### When to use hybrid vs internal LB
+
+| | Internal LB | Hybrid LB |
+|---|---|---|
+| Script | `launch_bench.sh` + `bench.py` | `launch_bench_hybrid.sh` + `bench_distributed.py` |
+| API servers | 1 (head only) | N (one per node) |
+| Scheduling bottleneck | Head node serializes all 32 ranks | Each node schedules its 8 ranks |
+| Best for | Low-mid concurrency, simple setup | High concurrency, max throughput |
+| Client | Single endpoint | Distributed across nodes |
+
+---
+
 ## Running alongside the disagg cluster
 
 The bench server uses a **different RPC port** (29560 vs 29550) so it won't
@@ -277,8 +357,10 @@ ssh <node> 'tail -50 /tmp/vllm_bench_logs/bench_worker_N.log'
 
 | File | Purpose |
 |------|---------|
-| `scripts/launch_bench.sh` | Start/stop the decode-bench server cluster |
-| `scripts/bench.py` | Run benchmarks against a server, print results |
+| `scripts/launch_bench.sh` | Start/stop decode-bench server (internal LB) |
+| `scripts/bench.py` | Run benchmarks against a single endpoint |
+| `scripts/launch_bench_hybrid.sh` | Start/stop decode-bench server (hybrid LB) |
+| `scripts/bench_distributed.py` | Distributed benchmarks across multiple endpoints |
 | `results/*.json` | Per-concurrency result files from `vllm bench serve` |
 | `/tmp/vllm_bench_logs/` | Server logs on remote nodes |
 

@@ -1,0 +1,27 @@
+{
+  "concurrency": 4096,
+  "endpoints": [
+    "http://10.20.0.18:8200",
+    "http://10.20.0.41:8200",
+    "http://10.20.0.42:8200",
+    "http://10.20.0.43:8200"
+  ],
+  "per_node": [
+    {
+      "endpoint": "http://10.20.0.18:8200",
+      "result": null
+    },
+    {
+      "endpoint": "http://10.20.0.41:8200",
+      "result": null
+    },
+    {
+      "endpoint": "http://10.20.0.42:8200",
+      "result": null
+    },
+    {
+      "endpoint": "http://10.20.0.43:8200",
+      "result": null
+    }
+  ]
+}

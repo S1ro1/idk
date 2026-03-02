@@ -74,7 +74,7 @@ def run_bench(
         "--trust-remote-code",
         "--tokenizer-mode",
         "auto",
-        "--disable-tqdm",
+        # "--disable-tqdm",
     ]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)

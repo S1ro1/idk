@@ -155,7 +155,7 @@ if (( DO_STOP )); then
         # Use pgrep + kill instead of pkill -f to avoid killing the SSH
         # session (pkill -f matches the bash process running the command).
         ssh $SSH_OPTS -n "$node" \
-            'pids=$(pgrep -f "vllm serve|vllm.entrypoints|EngineCore|ApiServer|DPCoordinator|multiprocessing.resource_tracker" 2>/dev/null | grep -v $$)
+            'pids=$(ps aux | grep -E "VLLM::|vllm serve|vllm.entrypoints|multiprocessing.resource_tracker" | grep -v grep | awk "{print \$2}")
              if [ -n "$pids" ]; then echo "$pids" | xargs kill -9 2>/dev/null; fi
              echo done' \
             2>/dev/null || echo "(unreachable)"
