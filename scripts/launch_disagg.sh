@@ -147,12 +147,18 @@ wait_for_server() {
 # =============================================================================
 if (( DO_STOP )); then
     echo "=== Stopping all remote vllm processes ==="
-    mapfile -t nodes < <(read_nodes)
+    # Read ALL nodes from the file (not just TOTAL_NODES) so --stop works
+    # without needing --mode to match the running deployment.
+    mapfile -t nodes < <(grep -v '^\s*$' "$NODES_FILE" | awk '{print $1}')
     for node in "${nodes[@]}"; do
-        echo "  [$node] ..."
+        echo -n "  [$node] "
+        # Use pgrep + kill instead of pkill -f to avoid killing the SSH
+        # session (pkill -f matches the bash process running the command).
         ssh $SSH_OPTS -n "$node" \
-            "pkill -f 'vllm serve' 2>/dev/null; pkill -f 'vllm.entrypoints' 2>/dev/null; echo done" \
-            2>/dev/null || echo "  [$node] (unreachable or no processes)"
+            'pids=$(pgrep -f "vllm serve|vllm.entrypoints|EngineCore|ApiServer|DPCoordinator|multiprocessing.resource_tracker" 2>/dev/null | grep -v $$)
+             if [ -n "$pids" ]; then echo "$pids" | xargs kill -9 2>/dev/null; fi
+             echo done' \
+            2>/dev/null || echo "(unreachable)"
     done
     pkill -f "disagg_proxy.py" 2>/dev/null && echo "  [local] proxy stopped" || true
     echo "Done."

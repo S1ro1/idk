@@ -1,0 +1,305 @@
+================================================================================
+ Decode Benchmark — Expanded Commands
+
+ What launch_bench.sh actually runs on each node, with all variables resolved.
+ Configuration: 4 nodes, EP=32, deepep_low_latency, GLM-5-FP8
+================================================================================
+
+Nodes (one per line in /tmp/bench_nodes.txt):
+  node0 = HEAD       (e.g. ltc-idc3-hgx8-h200-12,  IP = 10.20.0.18)
+  node1 = worker 1   (e.g. ltc-idc3-hgx8-h200-35)
+  node2 = worker 2   (e.g. ltc-idc3-hgx8-h200-36)
+  node3 = worker 3   (e.g. ltc-idc3-hgx8-h200-37)
+
+
+================================================================================
+ 1. KILL STALE PROCESSES (on every node)
+================================================================================
+
+# Run this on EACH node before launching:
+
+pids=$(pgrep -f "vllm serve|vllm.entrypoints|EngineCore|ApiServer|DPCoordinator|multiprocessing.resource_tracker" 2>/dev/null | grep -v $$)
+if [ -n "$pids" ]; then echo "$pids" | xargs kill -9 2>/dev/null; fi
+rm -rf /tmp/vllm_bench_logs/
+
+
+================================================================================
+ 2. HEAD NODE (node0) — serves HTTP on port 8200
+================================================================================
+
+# Environment
+export HF_HOME='/shared/huggingface'
+export HF_HUB_OFFLINE=1
+export LD_LIBRARY_PATH='/home/matej/dev/vllm-benchmarking/ep_kernels_workspace/nvshmem/lib':${LD_LIBRARY_PATH:-}
+ulimit -n 65536
+export NCCL_NET_PLUGIN=none
+export GLOO_SOCKET_IFNAME=bond0
+export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
+export TOKENIZERS_PARALLELISM=false
+
+# Get this node's IP
+D_IP=$(hostname -I | awk '{print $1}')
+
+# Launch
+/home/matej/dev/vllm-benchmarking/.venv/bin/vllm serve 'zai-org/GLM-5-FP8' \
+    --host 0.0.0.0 \
+    --port 8200 \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 32 \
+    --data-parallel-size-local 8 \
+    --data-parallel-address $D_IP \
+    --data-parallel-rpc-port 29560 \
+    --enable-expert-parallel \
+    --all2all-backend deepep_low_latency \
+    --trust-remote-code \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 32768 \
+    --disable-log-requests \
+    --kv-transfer-config '{"kv_connector":"DecodeBenchConnector","kv_role":"kv_both","kv_connector_extra_config":{"fill_mean":0.015,"fill_std":0.0}}' \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+
+
+================================================================================
+ 3. WORKER 1 (node1) — headless, DP ranks 8-15
+================================================================================
+
+# Environment (same as head)
+export HF_HOME='/shared/huggingface'
+export HF_HUB_OFFLINE=1
+export LD_LIBRARY_PATH='/home/matej/dev/vllm-benchmarking/ep_kernels_workspace/nvshmem/lib':${LD_LIBRARY_PATH:-}
+ulimit -n 65536
+export NCCL_NET_PLUGIN=none
+export GLOO_SOCKET_IFNAME=bond0
+export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
+export TOKENIZERS_PARALLELISM=false
+
+# Launch (note: --headless, --data-parallel-start-rank, --data-parallel-address points to HEAD IP)
+/home/matej/dev/vllm-benchmarking/.venv/bin/vllm serve 'zai-org/GLM-5-FP8' \
+    --headless \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 32 \
+    --data-parallel-size-local 8 \
+    --data-parallel-start-rank 8 \
+    --data-parallel-address 10.20.0.18 \
+    --data-parallel-rpc-port 29560 \
+    --enable-expert-parallel \
+    --all2all-backend deepep_low_latency \
+    --trust-remote-code \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 32768 \
+    --disable-log-requests \
+    --kv-transfer-config '{"kv_connector":"DecodeBenchConnector","kv_role":"kv_both","kv_connector_extra_config":{"fill_mean":0.015,"fill_std":0.0}}' \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+
+
+================================================================================
+ 4. WORKER 2 (node2) — headless, DP ranks 16-23
+================================================================================
+
+# Environment (same as head)
+export HF_HOME='/shared/huggingface'
+export HF_HUB_OFFLINE=1
+export LD_LIBRARY_PATH='/home/matej/dev/vllm-benchmarking/ep_kernels_workspace/nvshmem/lib':${LD_LIBRARY_PATH:-}
+ulimit -n 65536
+export NCCL_NET_PLUGIN=none
+export GLOO_SOCKET_IFNAME=bond0
+export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
+export TOKENIZERS_PARALLELISM=false
+
+# Launch
+/home/matej/dev/vllm-benchmarking/.venv/bin/vllm serve 'zai-org/GLM-5-FP8' \
+    --headless \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 32 \
+    --data-parallel-size-local 8 \
+    --data-parallel-start-rank 16 \
+    --data-parallel-address 10.20.0.18 \
+    --data-parallel-rpc-port 29560 \
+    --enable-expert-parallel \
+    --all2all-backend deepep_low_latency \
+    --trust-remote-code \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 32768 \
+    --disable-log-requests \
+    --kv-transfer-config '{"kv_connector":"DecodeBenchConnector","kv_role":"kv_both","kv_connector_extra_config":{"fill_mean":0.015,"fill_std":0.0}}' \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+
+
+================================================================================
+ 5. WORKER 3 (node3) — headless, DP ranks 24-31
+================================================================================
+
+# Environment (same as head)
+export HF_HOME='/shared/huggingface'
+export HF_HUB_OFFLINE=1
+export LD_LIBRARY_PATH='/home/matej/dev/vllm-benchmarking/ep_kernels_workspace/nvshmem/lib':${LD_LIBRARY_PATH:-}
+ulimit -n 65536
+export NCCL_NET_PLUGIN=none
+export GLOO_SOCKET_IFNAME=bond0
+export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
+export TOKENIZERS_PARALLELISM=false
+
+# Launch
+/home/matej/dev/vllm-benchmarking/.venv/bin/vllm serve 'zai-org/GLM-5-FP8' \
+    --headless \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 32 \
+    --data-parallel-size-local 8 \
+    --data-parallel-start-rank 24 \
+    --data-parallel-address 10.20.0.18 \
+    --data-parallel-rpc-port 29560 \
+    --enable-expert-parallel \
+    --all2all-backend deepep_low_latency \
+    --trust-remote-code \
+    --gpu-memory-utilization 0.90 \
+    --max-model-len 32768 \
+    --disable-log-requests \
+    --kv-transfer-config '{"kv_connector":"DecodeBenchConnector","kv_role":"kv_both","kv_connector_extra_config":{"fill_mean":0.015,"fill_std":0.0}}' \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+
+
+================================================================================
+ 6. RUN BENCHMARKS (from any machine that can reach the head)
+================================================================================
+
+# Wait for health check
+curl http://10.20.0.18:8200/health
+
+# Default sweep: 1k input, 1k output, concurrencies 1,8,32,64,128,256
+python scripts/bench.py --base-url http://10.20.0.18:8200
+
+# Custom sweep
+python scripts/bench.py --base-url http://10.20.0.18:8200 -c 32,64,128,256
+
+# Or use vllm bench serve directly:
+/home/matej/dev/vllm-benchmarking/.venv/bin/vllm bench serve \
+    --base-url http://10.20.0.18:8200 \
+    --model zai-org/GLM-5-FP8 \
+    --dataset-name random \
+    --random-input-len 1024 \
+    --random-output-len 1024 \
+    --random-range-ratio 0.0 \
+    --max-concurrency 64 \
+    --num-prompts 128 \
+    --request-rate inf \
+    --ignore-eos \
+    --save-result \
+    --result-dir results \
+    --result-filename decode_ep32_in1024_out1024_64.json \
+    --percentile-metrics ttft,tpot,itl,e2el \
+    --metric-percentiles 50,90,99 \
+    --trust-remote-code \
+    --tokenizer-mode auto
+
+
+================================================================================
+ WHAT CHANGES BETWEEN NODES
+================================================================================
+
+Only three things differ per worker:
+
+  --data-parallel-start-rank  N    (8, 16, 24 for workers 1, 2, 3)
+  --data-parallel-address     IP   (always the HEAD node's IP)
+  --headless                       (present on workers, absent on head)
+
+Head has instead:
+  --host 0.0.0.0
+  --port 8200
+  --data-parallel-address $D_IP    (its own IP)
+
+Everything else is identical across all 4 nodes.
+
+
+================================================================================
+ WHAT EACH FLAG DOES
+================================================================================
+
+--data-parallel-size 32         Total EP rank count across all nodes (4 × 8 GPUs)
+--data-parallel-size-local 8    EP ranks per node (1 per GPU)
+--data-parallel-start-rank N    First EP rank on this node (head=0, w1=8, w2=16, w3=24)
+--data-parallel-address IP      Head node IP for ZMQ handshake + Gloo rendezvous
+--data-parallel-rpc-port 29560  ZMQ ROUTER port on head for startup handshake
+--enable-expert-parallel        Use Expert Parallelism for MoE layers
+--all2all-backend               deepep_low_latency = NVSHMEM A2A (prod)
+                                deepep_high_throughput = NCCL A2A (simpler)
+--headless                      Worker mode: no HTTP server, EngineCore only
+--kv-transfer-config            DecodeBenchConnector fills KV with random values
+--compilation-config            FULL_DECODE_ONLY = full CUDA graphs for decode only
+
+
+================================================================================
+ ENVIRONMENT VARIABLES
+================================================================================
+
+NCCL_NET_PLUGIN=none          Prevents NCCL from loading HPC-X UCX plugin
+                              (which would steal UCM hooks from NIXL's UCX)
+GLOO_SOCKET_IFNAME=bond0      torch.distributed gloo uses bond0 (not eth0)
+DG_JIT_CACHE_DIR=/tmp/...     Local DeepGEMM JIT cache (avoids NFS Stale file handle)
+HF_HUB_OFFLINE=1              Don't call HuggingFace Hub (model is cached)
+HF_HOME=/shared/huggingface   Shared model cache path
+LD_LIBRARY_PATH               Must include NVSHMEM lib dir for deep_ep
+TOKENIZERS_PARALLELISM=false   Suppress HuggingFace tokenizer fork warning
+
+
+================================================================================
+ 7. BENCHMARKING WITH GUIDELLM (recommended over vllm bench serve)
+================================================================================
+
+# Install (once):
+pip install 'guidellm[recommended]'
+
+# Throughput benchmark — runs for 120s at max throughput, measures steady state:
+guidellm benchmark run \
+    --target "http://10.20.0.18:8200" \
+    --data "prompt_tokens=1024,output_tokens=1024" \
+    --profile throughput \
+    --max-seconds 120 \
+    --request-type text_completions \
+    --processor-args '{"trust_remote_code": true}' \
+    --backend-kwargs '{"timeout": 600}' \
+    --output-path results/guidellm/throughput_in1024_out1024.json
+
+# Concurrent sweep — test specific concurrency levels:
+guidellm benchmark run \
+    --target "http://10.20.0.18:8200" \
+    --data "prompt_tokens=1024,output_tokens=1024" \
+    --profile concurrent \
+    --rate "32,64,128,256" \
+    --max-seconds 120 \
+    --request-type text_completions \
+    --processor-args '{"trust_remote_code": true}' \
+    --backend-kwargs '{"timeout": 600}' \
+    --output-path results/guidellm/concurrent_sweep.json
+
+# Single concurrency level, fixed request count:
+guidellm benchmark run \
+    --target "http://10.20.0.18:8200" \
+    --data "prompt_tokens=1024,output_tokens=1024" \
+    --profile concurrent \
+    --rate 64 \
+    --max-requests 256 \
+    --request-type text_completions \
+    --processor-args '{"trust_remote_code": true}' \
+    --backend-kwargs '{"timeout": 600}' \
+    --output-path results/guidellm/bench_c64.json
+
+
+IMPORTANT: --backend-kwargs '{"timeout": 600}' is REQUIRED.
+Default is 60s which is too short for 1024-output-token decode.
+At EP=32, straggler requests (last few in a batch) run slowly because
+all 32 engines synchronize on every forward step — when most engines
+have finished their requests, the remaining 1-2 still running cause
+all engines to idle-wait. This can push individual request latency to
+60-120s+ at high concurrency. 600s timeout avoids false errors.
+
+PROFILES:
+  throughput   — max requests/s, no concurrency limit (best for peak throughput)
+  concurrent   — fixed number of concurrent requests (best for latency at load)
+  sweep        — auto-discover saturation point (default, good for exploration)
+  synchronous  — one request at a time (baseline latency)
+  constant     — fixed requests per second
+  poisson      — poisson-distributed arrivals
