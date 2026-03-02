@@ -13,3 +13,4 @@ results/outputs
 
 model
 ep_kernels_workspace/
+.env
