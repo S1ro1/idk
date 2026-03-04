@@ -213,7 +213,6 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
     --enable-eplb \
-    --enable-dbo \
     --all2all-backend ${A2A_BACKEND} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
@@ -256,7 +255,6 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --all2all-backend ${A2A_BACKEND} \
     --trust-remote-code \
     --enable-eplb \
-    --enable-dbo \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
     --max-num-seqs ${MAX_NUM_SEQS} \

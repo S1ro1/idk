@@ -24,7 +24,6 @@
 #   --stop                    Kill all remote vllm processes and exit
 #   --nodes-file FILE         Node list (default: valid_nodes.txt)
 #   --model MODEL_ID          Override model for this run
-#   --max-model-len N         Override max context length
 #   --proxy-only              (Re-)start the proxy only, leave servers alone
 #   --no-proxy                Start servers only, skip the proxy
 # =============================================================================
@@ -41,7 +40,6 @@ PROXY_ONLY=0
 NO_PROXY=0
 NODES_FILE="$REPO_ROOT/valid_nodes.txt"
 MODEL_OVERRIDE=""
-MAX_MODEL_LEN_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -49,7 +47,6 @@ while [[ $# -gt 0 ]]; do
         --stop)          DO_STOP=1;              shift   ;;
         --nodes-file)    NODES_FILE="$2";        shift 2 ;;
         --model)         MODEL_OVERRIDE="$2";    shift 2 ;;
-        --max-model-len) MAX_MODEL_LEN_OVERRIDE="$2"; shift 2 ;;
         --proxy-only)    PROXY_ONLY=1;           shift   ;;
         --no-proxy)      NO_PROXY=1;             shift   ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
@@ -66,12 +63,15 @@ case "$MODE" in
         PREFILL_DP_LOCAL=8
         DECODE_EP=8
         DECODE_DP_LOCAL=8
-        MAX_MODEL_LEN="${MAX_MODEL_LEN_OVERRIDE:-4096}"
+        MAX_MODEL_LEN=4096
         GPU_MEM_UTIL=0.80
+        MAX_NUM_SEQS=512
+        PREFILL_MAX_NUM_SEQS=1024
         HF_HUB_OFFLINE_VAL=1      # mini-glm-moe is cached
         HF_HOME_VAL="/shared/huggingface"
         PREFILL_A2A="deepep_high_throughput"
         DECODE_A2A="deepep_high_throughput"
+        TOOL_FLAGS=""
         ;;
     prod)
         MODEL="${MODEL_OVERRIDE:-zai-org/GLM-5-FP8}"
@@ -81,12 +81,15 @@ case "$MODE" in
         PREFILL_DP_LOCAL=8
         DECODE_EP=32
         DECODE_DP_LOCAL=8
-        MAX_MODEL_LEN="${MAX_MODEL_LEN_OVERRIDE:-32768}"
-        GPU_MEM_UTIL=0.95
+        MAX_MODEL_LEN=150000
+        GPU_MEM_UTIL=0.90
+        MAX_NUM_SEQS=1280
+        PREFILL_MAX_NUM_SEQS=2560
         HF_HUB_OFFLINE_VAL=1
         HF_HOME_VAL="/shared/huggingface"
         PREFILL_A2A="deepep_high_throughput"
         DECODE_A2A="deepep_low_latency"
+        TOOL_FLAGS="--tool-call-parser glm47 --reasoning-parser glm45 --enable-auto-tool-choice"
         ;;
     *)
         echo "Unknown mode: $MODE  (use dev|prod)" >&2; exit 1 ;;
@@ -114,6 +117,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=yes"
 # P listens on its own NIXL side-channel and includes remote_host/port in
 # every response; D connects to that address to fetch KV via UCX/RDMA.
 KV_CFG='{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_connector_extra_config":{"num_threads":1}}'
+DECODE_COMPILATION_CFG='{"cudagraph_mode":"FULL_DECODE_ONLY"}'
 
 # =============================================================================
 # Helpers
@@ -129,7 +133,7 @@ get_node_ip() {
 }
 
 wait_for_server() {
-    local host="$1" port="$2" label="${3:-$1:$2}" timeout="${4:-600}"
+    local host="$1" port="$2" label="${3:-$1:$2}" timeout="${4:-6000}"
     local elapsed=0
     echo -n "    Waiting for $label ."
     until curl -sf "http://$host:$port/health" >/dev/null 2>&1; do
@@ -155,12 +159,11 @@ if (( DO_STOP )); then
         # Use pgrep + kill instead of pkill -f to avoid killing the SSH
         # session (pkill -f matches the bash process running the command).
         ssh $SSH_OPTS -n "$node" \
-            'pids=$(ps aux | grep -E "VLLM::|vllm serve|vllm.entrypoints|multiprocessing.resource_tracker" | grep -v grep | awk "{print \$2}")
+            'pids=$(ps aux | grep -E "VLLM::|vllm serve|vllm.entrypoints|multiprocessing.resource_tracker|disagg_proxy" | grep -v grep | awk "{print \$2}")
              if [ -n "$pids" ]; then echo "$pids" | xargs kill -9 2>/dev/null; fi
              echo done' \
             2>/dev/null || echo "(unreachable)"
     done
-    pkill -f "disagg_proxy.py" 2>/dev/null && echo "  [local] proxy stopped" || true
     echo "Done."
     exit 0
 fi
@@ -250,7 +253,7 @@ if (( ! PROXY_ONLY )); then
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
 export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
-ulimit -n 65536
+ulimit -n 130000
 export UCX_RCACHE_MAX_UNRELEASED=1024
 # Restrict nixl's UCX to mlx5_0 only (other ports not connected/working).
 export UCX_NET_DEVICES='mlx5_0:1'
@@ -267,8 +270,8 @@ export GLOO_SOCKET_IFNAME=bond0
 # when many DP ranks compile simultaneously across nodes.  Seed it from the
 # NFS cache so JIT warmup reuses previously compiled kernels.
 export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+export VLLM_ENGINE_READY_TIMEOUT_S=4200
 rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
-export TOKENIZERS_PARALLELISM=false
 PREFILL_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$PREFILL_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
@@ -281,12 +284,14 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address \$PREFILL_IP \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --enable-eplb \
     --all2all-backend ${PREFILL_A2A} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
+    --max-num-seqs ${PREFILL_MAX_NUM_SEQS} \
     --disable-log-requests \
-    --kv-transfer-config '${KV_CFG}'
+    --kv-transfer-config '${KV_CFG}' ${TOOL_FLAGS}
 PREFILL_SCRIPT
     )
     echo "  Prefill head PID: $PREFILL_HEAD_PID"
@@ -302,7 +307,7 @@ PREFILL_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
 export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
-ulimit -n 65536
+ulimit -n 130000
 export UCX_RCACHE_MAX_UNRELEASED=1024
 export UCX_NET_DEVICES='mlx5_0:1'
 export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
@@ -314,8 +319,8 @@ export GLOO_SOCKET_IFNAME=bond0
 # when many DP ranks compile simultaneously across nodes.  Seed it from the
 # NFS cache so JIT warmup reuses previously compiled kernels.
 export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+export VLLM_ENGINE_READY_TIMEOUT_S=4200
 rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
-export TOKENIZERS_PARALLELISM=false
 P_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$P_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
@@ -328,12 +333,14 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address ${PREFILL_HEAD_IP} \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --enable-eplb \
     --all2all-backend ${PREFILL_A2A} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
+    --max-num-seqs ${PREFILL_MAX_NUM_SEQS} \
     --disable-log-requests \
-    --kv-transfer-config '${KV_CFG}'
+    --kv-transfer-config '${KV_CFG}' ${TOOL_FLAGS}
 PWORKER_SCRIPT
         )
         echo "  Prefill worker $i PID: $P_WORKER_PID"
@@ -351,7 +358,7 @@ PWORKER_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
 export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
-ulimit -n 65536
+ulimit -n 130000
 export UCX_RCACHE_MAX_UNRELEASED=1024
 export UCX_NET_DEVICES='mlx5_0:1'
 export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
@@ -363,8 +370,8 @@ export GLOO_SOCKET_IFNAME=bond0
 # when many DP ranks compile simultaneously across nodes.  Seed it from the
 # NFS cache so JIT warmup reuses previously compiled kernels.
 export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+export VLLM_ENGINE_READY_TIMEOUT_S=4200
 rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
-export TOKENIZERS_PARALLELISM=false
 D_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$D_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
@@ -377,12 +384,15 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address \$D_IP \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --enable-eplb \
     --all2all-backend ${DECODE_A2A} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
+    --max-num-seqs ${MAX_NUM_SEQS} \
     --disable-log-requests \
-    --kv-transfer-config '${KV_CFG}'
+    --kv-transfer-config '${KV_CFG}' \
+    --compilation-config '${DECODE_COMPILATION_CFG}' ${TOOL_FLAGS}
 DECODE_HEAD_SCRIPT
     )
     echo "  PID: $DECODE_HEAD_PID"
@@ -398,7 +408,7 @@ DECODE_HEAD_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
 export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
-ulimit -n 65536
+ulimit -n 130000
 export UCX_RCACHE_MAX_UNRELEASED=1024
 export UCX_NET_DEVICES='mlx5_0:1'
 export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
@@ -410,8 +420,8 @@ export GLOO_SOCKET_IFNAME=bond0
 # when many DP ranks compile simultaneously across nodes.  Seed it from the
 # NFS cache so JIT warmup reuses previously compiled kernels.
 export DG_JIT_CACHE_DIR=/tmp/deep_gemm_cache
+export VLLM_ENGINE_READY_TIMEOUT_S=4200
 rsync -a --ignore-existing /home/matej/.cache/vllm/deep_gemm/ /tmp/deep_gemm_cache/ 2>/dev/null || true
-export TOKENIZERS_PARALLELISM=false
 D_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$D_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
@@ -424,12 +434,15 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address ${DECODE_HEAD_IP} \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --enable-eplb \
     --all2all-backend ${DECODE_A2A} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
     --max-model-len ${MAX_MODEL_LEN} \
+    --max-num-seqs ${MAX_NUM_SEQS} \
     --disable-log-requests \
-    --kv-transfer-config '${KV_CFG}'
+    --kv-transfer-config '${KV_CFG}' \
+    --compilation-config '${DECODE_COMPILATION_CFG}' ${TOOL_FLAGS}
 WORKER_SCRIPT
         )
         echo "  Worker $i PID: $WORKER_PID"
@@ -447,19 +460,20 @@ fi
 # =============================================================================
 if (( ! NO_PROXY )); then
     echo ""
-    echo "=== Starting proxy (local, port $PROXY_PORT) ==="
-    pkill -f "disagg_proxy.py" 2>/dev/null && sleep 1 || true
+    echo "=== Starting proxy ($PREFILL_HEAD, port $PROXY_PORT) ==="
 
     PROXY_LOG="$LOG_DIR/disagg_proxy.log"
-    nohup "$PYTHON_BIN" "$SCRIPT_DIR/disagg_proxy.py" \
-        --host 0.0.0.0 \
-        --port "$PROXY_PORT" \
-        --prefill-host "$PREFILL_HEAD_IP" \
-        --prefill-port "$PREFILL_PORT" \
-        --decode-host  "$DECODE_HEAD_IP" \
-        --decode-port  "$DECODE_PORT" \
-        > "$PROXY_LOG" 2>&1 &
-    echo "  Proxy PID=$!  log=$PROXY_LOG"
+    PROXY_PID=$(launch_remote "$PREFILL_HEAD" "$PROXY_LOG" <<PROXY_SCRIPT
+exec '${PYTHON_BIN}' '${SCRIPT_DIR}/disagg_proxy.py' \
+    --host 0.0.0.0 \
+    --port ${PROXY_PORT} \
+    --prefill-host ${PREFILL_HEAD_IP} \
+    --prefill-port ${PREFILL_PORT} \
+    --decode-host  ${DECODE_HEAD_IP} \
+    --decode-port  ${DECODE_PORT}
+PROXY_SCRIPT
+    )
+    echo "  Proxy PID=$PROXY_PID  log=$PROXY_LOG"
     sleep 2
 fi
 
@@ -472,7 +486,7 @@ echo "=== Smoke test ==="
 if (( NO_PROXY )); then
     TARGET="http://${PREFILL_HEAD_IP}:${PREFILL_PORT}"
 else
-    TARGET="http://localhost:${PROXY_PORT}"
+    TARGET="http://${PREFILL_HEAD_IP}:${PROXY_PORT}"
     # Wait for proxy health
     for _ in $(seq 1 15); do
         curl -sf "${TARGET}/health" >/dev/null 2>&1 && break || sleep 2
@@ -510,7 +524,7 @@ echo ""
 echo "================================================================"
 echo " Disaggregated serving is UP"
 echo ""
-echo "  Proxy  (OpenAI API) : http://localhost:${PROXY_PORT}"
+echo "  Proxy  (OpenAI API) : http://${PREFILL_HEAD_IP}:${PROXY_PORT}  [$PREFILL_HEAD]"
 echo "  Prefill head        : http://${PREFILL_HEAD_IP}:${PREFILL_PORT}  [$PREFILL_HEAD]"
 echo "  Decode head         : http://${DECODE_HEAD_IP}:${DECODE_PORT} [$DECODE_HEAD]"
 echo "  Logs                : $LOG_DIR/"

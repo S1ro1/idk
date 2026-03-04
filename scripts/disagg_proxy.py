@@ -88,6 +88,9 @@ async def _route_pd(
             "max_tokens": 1,
             "kv_transfer_params": {"do_remote_decode": True},
         }
+        # stream_options is only valid when stream=True; remove it to avoid a
+        # 400 from vLLM when clients (e.g. guidellm) send it unconditionally.
+        p_payload.pop("stream_options", None)
         try:
             p_resp = await _post_json(session, p_url, p_payload)
         except web.HTTPException as exc:
