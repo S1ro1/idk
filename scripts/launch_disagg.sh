@@ -67,7 +67,7 @@ case "$MODE" in
         GPU_MEM_UTIL=0.80
         MAX_NUM_SEQS=512
         PREFILL_MAX_NUM_SEQS=1024
-        HF_HUB_OFFLINE_VAL=1      # mini-glm-moe is cached
+        HF_HUB_OFFLINE_VAL=0      # mini-glm-moe is cached
         HF_HOME_VAL="/shared/huggingface"
         PREFILL_A2A="deepep_high_throughput"
         DECODE_A2A="deepep_high_throughput"
@@ -85,7 +85,7 @@ case "$MODE" in
         GPU_MEM_UTIL=0.90
         MAX_NUM_SEQS=1280
         PREFILL_MAX_NUM_SEQS=2560
-        HF_HUB_OFFLINE_VAL=1
+        HF_HUB_OFFLINE_VAL=0
         HF_HOME_VAL="/shared/huggingface"
         PREFILL_A2A="deepep_high_throughput"
         DECODE_A2A="deepep_low_latency"

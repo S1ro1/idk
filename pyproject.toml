@@ -14,4 +14,6 @@ dependencies = [
     "deep-gemm @ file:///home/matej/dev/vllm-benchmarking/wheels/deep_gemm-2.3.0-cp312-cp312-linux_x86_64.whl",
     "deep-ep @ file:///home/matej/dev/vllm-benchmarking/wheels/deep_ep-1.2.1+73b6ea4-cp312-cp312-linux_x86_64.whl",
     "pplx-kernels @ file:///home/matej/dev/vllm-benchmarking/wheels/pplx_kernels-0.0.1-cp39-abi3-linux_x86_64.whl",
+    "vllm-router>=0.1.11",
+    "verifiers>=0.1.10",
 ]
