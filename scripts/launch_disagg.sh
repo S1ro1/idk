@@ -284,6 +284,7 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address \$PREFILL_IP \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --data-parallel-hybrid-lb \
     --enable-eplb \
     --all2all-backend ${PREFILL_A2A} \
     --trust-remote-code \
@@ -325,11 +326,13 @@ P_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$P_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
 exec '${VLLM_BIN}' serve '${MODEL}' \
-    --headless \
     --tensor-parallel-size 1 \
     --data-parallel-size ${PREFILL_EP} \
     --data-parallel-size-local ${PREFILL_DP_LOCAL} \
     --data-parallel-start-rank ${P_START_RANK} \
+    --host 0.0.0.0 \
+    --port ${PREFILL_PORT} \
+    --data-parallel-hybrid-lb \
     --data-parallel-address ${PREFILL_HEAD_IP} \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
@@ -385,6 +388,7 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
     --enable-eplb \
+    --data-parallel-hybrid-lb \
     --all2all-backend ${DECODE_A2A} \
     --trust-remote-code \
     --gpu-memory-utilization ${GPU_MEM_UTIL} \
@@ -426,7 +430,8 @@ D_IP=\$(hostname -I | awk '{print \$1}')
 export VLLM_NIXL_SIDE_CHANNEL_HOST=\$D_IP
 export VLLM_NIXL_SIDE_CHANNEL_PORT=${NIXL_PORT}
 exec '${VLLM_BIN}' serve '${MODEL}' \
-    --headless \
+    --host 0.0.0.0 \
+    --port ${DECODE_PORT} \
     --tensor-parallel-size 1 \
     --data-parallel-size ${DECODE_EP} \
     --data-parallel-size-local ${DECODE_DP_LOCAL} \
@@ -434,6 +439,7 @@ exec '${VLLM_BIN}' serve '${MODEL}' \
     --data-parallel-address ${DECODE_HEAD_IP} \
     --data-parallel-rpc-port ${DP_RPC_PORT} \
     --enable-expert-parallel \
+    --data-parallel-hybrid-lb \
     --enable-eplb \
     --all2all-backend ${DECODE_A2A} \
     --trust-remote-code \
