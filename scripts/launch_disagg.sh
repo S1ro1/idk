@@ -252,11 +252,11 @@ if (( ! PROXY_ONLY )); then
     PREFILL_HEAD_PID=$(launch_remote "$PREFILL_HEAD" "$PREFILL_LOG" <<PREFILL_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
-export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
+# export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
 ulimit -n 130000
-export UCX_RCACHE_MAX_UNRELEASED=1024
+# export UCX_RCACHE_MAX_UNRELEASED=1024
 # Restrict nixl's UCX to mlx5_0 only (other ports not connected/working).
-export UCX_NET_DEVICES='mlx5_0:1'
+# export UCX_NET_DEVICES='mlx5_0:1'
 export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
 # NCCL_NET_PLUGIN=none prevents NCCL from loading the HPC-X UCX plugin
 # (libnccl-net.so), which would install UCM hooks and prevent nixl's bundled
@@ -306,11 +306,11 @@ PREFILL_SCRIPT
         P_WORKER_PID=$(launch_remote "$P_WORKER_NODE" "$P_WORKER_LOG" <<PWORKER_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
-export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
+# export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
 ulimit -n 130000
-export UCX_RCACHE_MAX_UNRELEASED=1024
-export UCX_NET_DEVICES='mlx5_0:1'
-export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
+# export UCX_RCACHE_MAX_UNRELEASED=1024
+# export UCX_NET_DEVICES='mlx5_0:1'
+# export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
 export NCCL_NET_PLUGIN=none
 # Force torch.distributed gloo (DP group discovery) to use Ethernet, not IB.
 # Without this, gloo hangs or fails on IB-attached nodes.
@@ -357,11 +357,11 @@ PWORKER_SCRIPT
     DECODE_HEAD_PID=$(launch_remote "$DECODE_HEAD" "$DECODE_HEAD_LOG" <<DECODE_HEAD_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
-export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
+# export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
 ulimit -n 130000
-export UCX_RCACHE_MAX_UNRELEASED=1024
+# export UCX_RCACHE_MAX_UNRELEASED=1024
 export UCX_NET_DEVICES='mlx5_0:1'
-export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
+# export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
 export NCCL_NET_PLUGIN=none
 # Force torch.distributed gloo (DP group discovery) to use Ethernet, not IB.
 # Without this, gloo hangs or fails on IB-attached nodes.
@@ -407,11 +407,11 @@ DECODE_HEAD_SCRIPT
         WORKER_PID=$(launch_remote "$WORKER_NODE" "$WORKER_LOG" <<WORKER_SCRIPT
 export HF_HOME='${HF_HOME_VAL}'
 export HF_HUB_OFFLINE='${HF_HUB_OFFLINE_VAL}'
-export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
+# export LD_LIBRARY_PATH='${NVSHMEM_LIB_DIR}':\${LD_LIBRARY_PATH:-}
 ulimit -n 130000
-export UCX_RCACHE_MAX_UNRELEASED=1024
+# export UCX_RCACHE_MAX_UNRELEASED=1024
 export UCX_NET_DEVICES='mlx5_0:1'
-export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
+# export UCX_TLS='rc,dc,self,sm,cma,cuda_ipc,cuda_copy'
 export NCCL_NET_PLUGIN=none
 # Force torch.distributed gloo (DP group discovery) to use Ethernet, not IB.
 # Without this, gloo hangs or fails on IB-attached nodes.
